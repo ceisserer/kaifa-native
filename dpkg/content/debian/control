@@ -1,11 +1,11 @@
 Source: kaifareader
 Priority: optional
-Maintainer: Stefan Felkel <16918854+tirolerstefan@users.noreply.github.com>
+Maintainer: Clemens Eisserer <ceisserer@gmail.com>
+Build-Depends: debhelper (>= 13), libssl-dev, libmosquitto-dev, libcjson-dev
 Standards-Version: 4.5.1
-Homepage: https://github.com/tirolerstefan/kaifa
+Homepage: https://github.com/ceisserer/kaifa-native
 
 Package: kaifareader
-Architecture: all
-Depends: ${misc:Depends}, ${shlibs:Depends}, python3, python3-serial, python3-pycryptodome,
-         python3-paho-mqtt
-Description: Read out Kaifa M309 using serial connection.
+Architecture: any
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: Read out Kaifa M309 using serial connection (native C version).

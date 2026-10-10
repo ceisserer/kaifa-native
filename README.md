@@ -1,9 +1,17 @@
-# Kaifa MA309 Smart Meter Logger
+# Kaifa MA309 Smart Meter Logger (native C version)
 
 ## Overview
 
-This script was made to read out the new Smart Meter "Kaifa MA309"
+This program was made to read out the new Smart Meter "Kaifa MA309"
 used by Austrian power grid operators, here tested with TINETZ and EVN.
+
+It is a C port of the Python script `kaifareader.py` from
+[tirolerstefan/kaifa](https://github.com/tirolerstefan/kaifa) and uses the
+same `meter.json` config format, so it can be used as a drop-in replacement.
+The port was made to get rid of the Python runtime and its libraries
+(e.g. paho-mqtt 2.x broke the original script), and to run as a single small
+binary with low memory and CPU usage on small devices like a Raspberry Pi
+or a router.
 
 Specification of the interface:
 https://www.tinetz.at/fileadmin/user_upload/Kundenservice/pdf/Beschreibung_Kundenschnittstelle_Smart_Meter_TINETZ.pdf
@@ -83,7 +91,44 @@ is supported.
   `export_mqtt_user`, `export_mqtt_password` and `export_mqtt_basetopic`
   have to be set.
 
+The following values are published below `<export_mqtt_basetopic>/`:
+
+| Topic | Value |
+|---|---|
+| `RealEnergyIn_S` | active energy imported (kWh), same as the original Python version |
+| `RealEnergyOut_S` | active energy exported (kWh), same as the original Python version |
+| `VoltageL1`..`VoltageL3` | voltage per phase (V) |
+| `CurrentL1`..`CurrentL3` | current per phase (A) |
+| `RealEnergyIn` | active energy imported (Wh, OBIS 1.8.0) |
+| `RealEnergyOut` | active energy exported (Wh, OBIS 2.8.0) |
+| `RealPowerIn` | active power imported (W, OBIS 1.7.0) |
+| `RealPowerOut` | active power exported (W, OBIS 2.7.0) |
+| `RealPower` | net active power, `RealPowerIn - RealPowerOut` (W) |
+| `PowerFactor` | power factor |
+
+## Build
+
+Build dependencies (Debian/Raspberry Pi OS):
+
+`sudo apt install build-essential libssl-dev libmosquitto-dev libcjson-dev`
+
+Build and install to `/usr/bin/kaifareader`:
+
+```
+make
+sudo make install
+```
+
 ## Installation
+
+### Debian package
+
+Build the package (additionally needs `debhelper`):
+
+```
+cd dpkg
+./build_pkg.sh
+```
 
 ### Systemd automatic service
 
@@ -115,11 +160,11 @@ Start manually (e.g. after manually stopped)
 
 #### Foreground
 
-`python3 kaifa.py`
+`kaifareader [config_file]` (default: `/etc/kaifareader/meter.json`)
 
 #### Background
 
-`nohup python3 kaifa.py &`
+`nohup kaifareader /etc/kaifareader/meter.json &`
 
 ## Stop
 

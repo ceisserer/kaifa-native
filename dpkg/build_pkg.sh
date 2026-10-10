@@ -1,12 +1,15 @@
 #!/bin/sh
 
+# build binary
+make -C ../.. kaifareader || { echo "Error building kaifareader"; exit 1; }
+
 cd content
 
 # copy files to debian package structure
-mkdir -p usr/lib/kaifareader/
+mkdir -p usr/bin/
 mkdir -p etc/kaifareader/
 mkdir -p lib/systemd/system/
-cp -v ../../kaifareader.py               usr/lib/kaifareader/
+cp -v ../../kaifareader                  usr/bin/
 cp -v ../../meter_template.json          etc/kaifareader/
 cp -v ../../systemd/kaifareader.service  lib/systemd/system/
 
