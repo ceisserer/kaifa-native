@@ -324,6 +324,78 @@ static const uint8_t OBIS_FACTOR[6] = { 1, 0, 13, 7, 0, 255 };
 #define OBIS_REAL_ENERGY_IN_S "1.8.0"
 #define OBIS_REAL_ENERGY_OUT_S "2.8.0"
 
+/*
+ * Values that can be published via MQTT (see "export_mqtt_topics")
+ */
+
+typedef enum {
+    VAL_RAW, /* OBIS value as is */
+    VAL_KWH, /* OBIS value (Wh) / 1000, a Python float like in kaifareader.py */
+    VAL_NET, /* OBIS value - second OBIS value */
+} value_kind_t;
+
+typedef struct {
+    const char *name;
+    value_kind_t kind;
+    const uint8_t *obis;
+    const uint8_t *obis2; /* VAL_NET only */
+} value_def_t;
+
+static const value_def_t VALUES[] = {
+    { "energy_in_kwh", VAL_KWH, OBIS_REAL_ENERGY_IN, NULL },
+    { "energy_out_kwh", VAL_KWH, OBIS_REAL_ENERGY_OUT, NULL },
+    { "energy_in", VAL_RAW, OBIS_REAL_ENERGY_IN, NULL },
+    { "energy_out", VAL_RAW, OBIS_REAL_ENERGY_OUT, NULL },
+    { "voltage_l1", VAL_RAW, OBIS_VOLTAGE_L1, NULL },
+    { "voltage_l2", VAL_RAW, OBIS_VOLTAGE_L2, NULL },
+    { "voltage_l3", VAL_RAW, OBIS_VOLTAGE_L3, NULL },
+    { "current_l1", VAL_RAW, OBIS_CURRENT_L1, NULL },
+    { "current_l2", VAL_RAW, OBIS_CURRENT_L2, NULL },
+    { "current_l3", VAL_RAW, OBIS_CURRENT_L3, NULL },
+    { "power_in", VAL_RAW, OBIS_REAL_POWER_IN, NULL },
+    { "power_out", VAL_RAW, OBIS_REAL_POWER_OUT, NULL },
+    { "power_net", VAL_NET, OBIS_REAL_POWER_IN, OBIS_REAL_POWER_OUT },
+    { "power_factor", VAL_RAW, OBIS_FACTOR, NULL },
+};
+
+static const value_def_t *value_find(const char *name)
+{
+    for (size_t i = 0; i < sizeof(VALUES) / sizeof(VALUES[0]); i++)
+        if (strcmp(VALUES[i].name, name) == 0)
+            return &VALUES[i];
+    return NULL;
+}
+
+typedef struct {
+    const char *topic;
+    const char *value;
+} topic_map_t;
+
+/* published if "export_mqtt_topics" is not set: topics of kaifareader.py first */
+static const topic_map_t DEFAULT_MQTT_TOPICS[] = {
+    { "RealEnergyIn_S", "energy_in_kwh" },
+    { "RealEnergyOut_S", "energy_out_kwh" },
+    { "VoltageL1", "voltage_l1" },
+    { "VoltageL2", "voltage_l2" },
+    { "VoltageL3", "voltage_l3" },
+    { "CurrentL1", "current_l1" },
+    { "CurrentL2", "current_l2" },
+    { "CurrentL3", "current_l3" },
+    { "RealEnergyIn", "energy_in" },
+    { "RealEnergyOut", "energy_out" },
+    { "RealPowerIn", "power_in" },
+    { "RealPowerOut", "power_out" },
+    { "RealPower", "power_net" },
+    { "PowerFactor", "power_factor" },
+};
+
+#define MAX_MQTT_TOPICS 64
+
+typedef struct {
+    const char *topic;
+    const value_def_t *value;
+} mqtt_topic_t;
+
 #define MAX_OBIS 64
 
 typedef struct {
@@ -381,6 +453,8 @@ typedef struct {
     const char *mqtt_user;
     const char *mqtt_password;
     const char *mqtt_basetopic;
+    mqtt_topic_t mqtt_topics[MAX_MQTT_TOPICS];
+    size_t mqtt_topic_count;
 } config_t;
 
 /* strip the module prefix of values that the Python version eval()s, e.g. "serial.PARITY_NONE" */
@@ -628,6 +702,33 @@ static bool config_load(config_t *cfg, const char *file)
     cfg->mqtt_user = cfg_opt_string(r, "export_mqtt_user");
     cfg->mqtt_password = cfg_opt_string(r, "export_mqtt_password");
     cfg->mqtt_basetopic = cfg_opt_string(r, "export_mqtt_basetopic");
+
+    item = cJSON_GetObjectItemCaseSensitive(r, "export_mqtt_topics");
+    if (item) {
+        const cJSON *entry;
+        if (!cJSON_IsObject(item)) {
+            fprintf(stderr, "Config file %s: \"export_mqtt_topics\" must be an object\n", file);
+            return false;
+        }
+        cJSON_ArrayForEach(entry, item) {
+            const value_def_t *v = cJSON_IsString(entry) ? value_find(entry->valuestring) : NULL;
+            if (!v) {
+                fprintf(stderr, "Config file %s: unknown value for MQTT topic \"%s\"\n", file,
+                        entry->string);
+                return false;
+            }
+            if (cfg->mqtt_topic_count == MAX_MQTT_TOPICS) {
+                fprintf(stderr, "Config file %s: too many MQTT topics (max %d)\n", file,
+                        MAX_MQTT_TOPICS);
+                return false;
+            }
+            cfg->mqtt_topics[cfg->mqtt_topic_count++] = (mqtt_topic_t){ entry->string, v };
+        }
+    } else {
+        for (size_t i = 0; i < sizeof(DEFAULT_MQTT_TOPICS) / sizeof(DEFAULT_MQTT_TOPICS[0]); i++)
+            cfg->mqtt_topics[cfg->mqtt_topic_count++] =
+                (mqtt_topic_t){ DEFAULT_MQTT_TOPICS[i].topic, value_find(DEFAULT_MQTT_TOPICS[i].value) };
+    }
 
     return true;
 }
@@ -1087,48 +1188,30 @@ static void mqtt_publish_num(struct mosquitto *mosq, const config_t *cfg, const 
 
 static void export_mqtt(struct mosquitto *mosq, const config_t *cfg, const obis_table_t *t)
 {
-    static const struct {
-        const char *name;
-        const uint8_t *obis;
-    } topics[] = {
-        { "VoltageL1", OBIS_VOLTAGE_L1 },
-        { "VoltageL2", OBIS_VOLTAGE_L2 },
-        { "VoltageL3", OBIS_VOLTAGE_L3 },
-        { "CurrentL1", OBIS_CURRENT_L1 },
-        { "CurrentL2", OBIS_CURRENT_L2 },
-        { "CurrentL3", OBIS_CURRENT_L3 },
-        { "RealEnergyIn", OBIS_REAL_ENERGY_IN },
-        { "RealEnergyOut", OBIS_REAL_ENERGY_OUT },
-        { "RealPowerIn", OBIS_REAL_POWER_IN },
-        { "RealPowerOut", OBIS_REAL_POWER_OUT },
-    };
+    for (size_t i = 0; i < cfg->mqtt_topic_count; i++) {
+        const value_def_t *v = cfg->mqtt_topics[i].value;
+        const pynum_t *a = obis_get(t, v->obis);
+        const pynum_t *b = v->obis2 ? obis_get(t, v->obis2) : NULL;
+        pynum_t num;
+        bool ok = a != NULL;
 
-    /* topics of the original kaifareader.py: energy in kWh (Python float) */
-    static const struct {
-        const char *name;
-        const uint8_t *obis;
-    } kwh_topics[] = {
-        { "RealEnergyIn_S", OBIS_REAL_ENERGY_IN },
-        { "RealEnergyOut_S", OBIS_REAL_ENERGY_OUT },
-    };
-
-    for (size_t i = 0; i < sizeof(kwh_topics) / sizeof(kwh_topics[0]); i++) {
-        const pynum_t *wh = obis_get(t, kwh_topics[i].obis);
-        pynum_t kwh = { .is_float = true, .f = wh ? pynum_as_double(*wh) / 1000 : 0 };
-        mqtt_publish_num(mosq, cfg, kwh_topics[i].name, wh ? &kwh : NULL);
+        switch (v->kind) {
+        case VAL_RAW:
+            if (ok)
+                num = *a;
+            break;
+        case VAL_KWH:
+            if (ok)
+                num = (pynum_t){ .is_float = true, .f = pynum_as_double(*a) / 1000 };
+            break;
+        case VAL_NET:
+            ok = a && b;
+            if (ok)
+                num = pynum_sub(*a, *b);
+            break;
+        }
+        mqtt_publish_num(mosq, cfg, cfg->mqtt_topics[i].topic, ok ? &num : NULL);
     }
-
-    for (size_t i = 0; i < sizeof(topics) / sizeof(topics[0]); i++)
-        mqtt_publish_num(mosq, cfg, topics[i].name, obis_get(t, topics[i].obis));
-
-    const pynum_t *p_in = obis_get(t, OBIS_REAL_POWER_IN);
-    const pynum_t *p_out = obis_get(t, OBIS_REAL_POWER_OUT);
-    pynum_t p_sum;
-    if (p_in && p_out)
-        p_sum = pynum_sub(*p_in, *p_out);
-    mqtt_publish_num(mosq, cfg, "RealPower", p_in && p_out ? &p_sum : NULL);
-
-    mqtt_publish_num(mosq, cfg, "PowerFactor", obis_get(t, OBIS_FACTOR));
 }
 
 /*

@@ -91,20 +91,47 @@ is supported.
   `export_mqtt_user`, `export_mqtt_password` and `export_mqtt_basetopic`
   have to be set.
 
-The following values are published below `<export_mqtt_basetopic>/`:
+The values are published below `<export_mqtt_basetopic>/`. Which values are
+published, and under which topic names, can be set with the optional config
+key `export_mqtt_topics`, which maps topic names to value names:
+
+```
+  "export_mqtt_topics": {
+    "SpannungL1": "voltage_l1",
+    "WirkenergieP": "energy_in",
+    "Momentanleistung": "power_net"
+  }
+```
+
+Available values:
+
+| Value | Description |
+|---|---|
+| `energy_in_kwh` | active energy imported (kWh, OBIS 1.8.0 / 1000) |
+| `energy_out_kwh` | active energy exported (kWh, OBIS 2.8.0 / 1000) |
+| `energy_in` | active energy imported (Wh, OBIS 1.8.0) |
+| `energy_out` | active energy exported (Wh, OBIS 2.8.0) |
+| `voltage_l1`..`voltage_l3` | voltage per phase (V) |
+| `current_l1`..`current_l3` | current per phase (A) |
+| `power_in` | active power imported (W, OBIS 1.7.0) |
+| `power_out` | active power exported (W, OBIS 2.7.0) |
+| `power_net` | net active power, `power_in - power_out` (W) |
+| `power_factor` | power factor |
+
+Without `export_mqtt_topics`, these topics are published:
 
 | Topic | Value |
 |---|---|
-| `RealEnergyIn_S` | active energy imported (kWh), same as the original Python version |
-| `RealEnergyOut_S` | active energy exported (kWh), same as the original Python version |
-| `VoltageL1`..`VoltageL3` | voltage per phase (V) |
-| `CurrentL1`..`CurrentL3` | current per phase (A) |
-| `RealEnergyIn` | active energy imported (Wh, OBIS 1.8.0) |
-| `RealEnergyOut` | active energy exported (Wh, OBIS 2.8.0) |
-| `RealPowerIn` | active power imported (W, OBIS 1.7.0) |
-| `RealPowerOut` | active power exported (W, OBIS 2.7.0) |
-| `RealPower` | net active power, `RealPowerIn - RealPowerOut` (W) |
-| `PowerFactor` | power factor |
+| `RealEnergyIn_S` | `energy_in_kwh` (same as the original Python version) |
+| `RealEnergyOut_S` | `energy_out_kwh` (same as the original Python version) |
+| `VoltageL1`..`VoltageL3` | `voltage_l1`..`voltage_l3` |
+| `CurrentL1`..`CurrentL3` | `current_l1`..`current_l3` |
+| `RealEnergyIn` | `energy_in` |
+| `RealEnergyOut` | `energy_out` |
+| `RealPowerIn` | `power_in` |
+| `RealPowerOut` | `power_out` |
+| `RealPower` | `power_net` |
+| `PowerFactor` | `power_factor` |
 
 ## Build
 
