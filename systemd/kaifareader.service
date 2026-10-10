@@ -1,6 +1,7 @@
 [Unit]
 Description=kaifareader
-After=syslog.target network.target ntp.service
+After=syslog.target network-online.target ntp.service mosquitto.service
+Wants=network-online.target
 
 [Service]
 ExecStartPre=/bin/mkdir -p /var/run/kaifareader
@@ -9,6 +10,11 @@ ExecStartPre=/bin/chmod 777 /var/run/kaifareader
 ExecStartPre=/bin/chmod 777 /var/log/kaifareader
 ExecStart=/usr/bin/kaifareader /etc/kaifareader/meter.json
 StandardOutput=null
+StandardError=journal
+Restart=on-failure
+RestartSec=5
+# no restart on config error (10) or logging error (20)
+RestartPreventExitStatus=10 20
 
 [Install]
 WantedBy=multi-user.target
