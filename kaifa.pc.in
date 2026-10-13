@@ -1,0 +1,11 @@
+prefix=@PREFIX@
+libdir=@LIBDIR@
+includedir=${prefix}/include
+
+Name: kaifa
+Description: Read out the Kaifa MA309 smart meter via M-Bus serial interface
+Version: @VERSION@
+Libs: -L${libdir} -lkaifa
+Libs.private: -lcrypto -lm
+Requires.private: libcrypto
+Cflags: -I${includedir}

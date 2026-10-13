@@ -13,6 +13,16 @@ The port was made to get rid of the Python runtime and its libraries
 binary with low memory and CPU usage on small devices like a Raspberry Pi
 or a router.
 
+The project consists of two parts:
+
+- **`kaifareader`**: a ready-to-use daemon that exports the meter values
+  to MQTT or to a Solarview file (see [Config](#config) and following).
+- **`libkaifa`**: the meter readout itself (serial port, telegram framing,
+  decryption, OBIS decoding) as a C library with a small interface, for
+  integrating the meter into your own programs. It only depends on OpenSSL's
+  libcrypto, no libmosquitto or cJSON needed. See
+  [Shared library (libkaifa)](#shared-library-libkaifa).
+
 Specification of the interface:
 https://www.tinetz.at/fileadmin/user_upload/Kundenservice/pdf/Beschreibung_Kundenschnittstelle_Smart_Meter_TINETZ.pdf
 
@@ -22,7 +32,7 @@ https://www.photovoltaikforum.com/thread/157476-stromz%C3%A4hler-kaifa-ma309-wel
 Useful description of TiNetz frames:
 https://www.gurux.fi/node/18232
 
-This script was only tested with the above meter and the mentioned suppliers.
+This program was only tested with the above meter and the mentioned suppliers.
 
 ## Required Hardware
 
@@ -145,6 +155,133 @@ Build and install to `/usr/bin/kaifareader`:
 make
 sudo make install
 ```
+
+`kaifareader` contains libkaifa (linked statically), so the library does not
+have to be installed to run it. To build the library, see below.
+
+## Shared library (libkaifa)
+
+### Build and install
+
+The library only needs OpenSSL's libcrypto:
+
+`sudo apt install build-essential libssl-dev`
+
+```
+make lib
+sudo make install-lib
+```
+
+This builds and installs
+
+| File | |
+|---|---|
+| `/usr/lib/libkaifa.so.1.0.0` (+ symlinks `libkaifa.so.1`, `libkaifa.so`) | shared library |
+| `/usr/lib/libkaifa.a` | static library |
+| `/usr/include/kaifa.h` | header, documents the whole interface |
+| `/usr/lib/pkgconfig/kaifa.pc` | pkg-config file |
+
+Use `PREFIX=...`, `LIBDIR=...` and `DESTDIR=...` to change the install
+locations, e.g. `sudo make install-lib PREFIX=/usr/local` or
+`make install-lib LIBDIR=/usr/lib/aarch64-linux-gnu` for multiarch.
+
+Link your program with
+
+```
+cc -o myprog myprog.c $(pkg-config --cflags --libs kaifa)
+```
+
+or for static linking `$(pkg-config --static --cflags --libs kaifa)`.
+
+### Usage
+
+```c
+#include <stdio.h>
+#include <kaifa.h>
+
+int main(void)
+{
+    kaifa_config_t cfg;
+    kaifa_config_init(&cfg);              /* defaults: 2400 8N1, TINETZ, ... */
+    cfg.port = "/dev/ttyUSB0";
+    cfg.key_hex = "00112233445566778899aabbccddeeff";
+    cfg.supplier = KAIFA_SUPPLIER_TINETZ; /* or KAIFA_SUPPLIER_EVN */
+
+    kaifa_reader_t *reader;
+    int rc = kaifa_open(&cfg, &reader);
+    if (rc != KAIFA_OK) {
+        fprintf(stderr, "kaifa_open: %s\n", kaifa_strerror(rc));
+        return 1;
+    }
+
+    kaifa_reading_t r;
+    for (;;) {
+        rc = kaifa_read(reader, &r, 30000); /* timeout in ms, -1 = forever */
+        if (rc == KAIFA_ERR_IO || rc == KAIFA_ERR_ABORTED)
+            break;
+        if (rc != KAIFA_OK) /* KAIFA_ERR_TIMEOUT, KAIFA_ERR_FRAME: try again */
+            continue;
+        if (r.values[KAIFA_POWER_IN].valid)
+            printf("power in: %.0f W\n", r.values[KAIFA_POWER_IN].value);
+    }
+
+    kaifa_close(reader);
+    return 0;
+}
+```
+
+A complete example that prints all values is in
+[`examples/kaifa_example.c`](examples/kaifa_example.c)
+(`make example`, then
+`LD_LIBRARY_PATH=. examples/kaifa_example /dev/ttyUSB0 <key> [TINETZ|EVN]`).
+
+### Interface overview
+
+| Function | Description |
+|---|---|
+| `kaifa_config_init(&cfg)` | fill a `kaifa_config_t` with defaults |
+| `kaifa_open(&cfg, &reader)` | open and configure the serial port |
+| `kaifa_read(reader, &reading, timeout_ms)` | wait for the next telegram pair, decrypt and decode it |
+| `kaifa_abort(reader)` | make a blocking `kaifa_read()` return `KAIFA_ERR_ABORTED`; safe from other threads and signal handlers |
+| `kaifa_close(reader)` | close the port and free the reader |
+| `kaifa_decode(&cfg, frame1, len1, frame2, len2, &reading)` | decode a telegram pair received by other means (no serial port) |
+| `kaifa_value_name(id)`, `kaifa_value_unit(id)`, `kaifa_value_obis(id)` | metadata of a value, e.g. `"voltage_l1"`, `"V"`, `"1.0.32.7.0.255"` |
+| `kaifa_strerror(rc)` | text for a `KAIFA_*` return code |
+
+`kaifa_config_t` fields:
+
+| Field | Default | Description |
+|---|---|---|
+| `port` | - | serial device, required |
+| `key_hex` | - | AES key as hex string (32, 48 or 64 digits), required |
+| `supplier` | `KAIFA_SUPPLIER_TINETZ` | grid operator, `KAIFA_SUPPLIER_TINETZ` or `KAIFA_SUPPLIER_EVN` |
+| `baudrate`, `parity`, `stopbits`, `bytesize` | `2400`, `'N'`, `1`, `8` | serial settings |
+| `chunk_timeout` | `1.0` | seconds to wait for a chunk of serial data (`interval` in `meter.json`) |
+| `log_fn`, `log_user`, `log_level` | `NULL`, `NULL`, `KAIFA_LOG_INFO` | optional log callback; the library itself never prints anything |
+
+A `kaifa_reading_t` contains `values[KAIFA_VALUE_COUNT]`, indexed by:
+
+| Id | Unit | OBIS |
+|---|---|---|
+| `KAIFA_VOLTAGE_L1`..`KAIFA_VOLTAGE_L3` | V | 1.0.32.7.0.255, 1.0.52.7.0.255, 1.0.72.7.0.255 |
+| `KAIFA_CURRENT_L1`..`KAIFA_CURRENT_L3` | A | 1.0.31.7.0.255, 1.0.51.7.0.255, 1.0.71.7.0.255 |
+| `KAIFA_POWER_IN` / `KAIFA_POWER_OUT` | W | 1.0.1.7.0.255 / 1.0.2.7.0.255 |
+| `KAIFA_ENERGY_IN` / `KAIFA_ENERGY_OUT` | Wh | 1.0.1.8.0.255 / 1.0.2.8.0.255 |
+| `KAIFA_POWER_FACTOR` | | 1.0.13.7.0.255 |
+
+Each value has `valid` (false if missing in the telegram), `value` (as
+`double`, in the unit above) and the transmitted `raw` value and decimal
+`scaler`. The reading also contains the meter's `system_title` and the
+telegram's `invocation_counter`.
+
+Notes:
+
+- A reader must only be used by one thread at a time (except
+  `kaifa_abort()`); multiple readers for multiple meters are fine.
+- After `kaifa_abort()` all further `kaifa_read()` calls on that reader
+  return `KAIFA_ERR_ABORTED`; close it and open a new one to continue.
+- Like the original Python script, the AES-GCM authentication tag is not
+  verified, so a wrong key yields garbage values rather than an error.
 
 ## Installation
 

@@ -7,3 +7,9 @@
 # compiled binary
 /kaifareader
 *.o
+
+# library build output
+/libkaifa.so*
+/libkaifa.a
+/kaifa.pc
+/examples/kaifa_example
